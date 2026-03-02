@@ -16,7 +16,8 @@ headers = {'User-Agent': 'MyFirstApp (your_email@example.com)'}
 url = 'https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=144&owner=only&count=40&output=atom'
 
 now_utc = datetime.now(timezone.utc)
-time_limit = now_utc - timedelta(minutes=15)
+# 🌟 戰術修正：將雷達波段縮小至 6 分鐘！完美覆蓋每 5 分鐘的巡邏，徹底消滅重複洗版！
+time_limit = now_utc - timedelta(minutes=6)
 
 try:
     response = requests.get(url, headers=headers)
@@ -36,7 +37,6 @@ try:
             if datetime.fromisoformat(updated_str.replace('Z', '+00:00')).astimezone(timezone.utc) < time_limit: 
                 break
         except Exception:
-            # 🛑 核心止血裝甲：若時間解析失敗，直接跳過該筆文件，絕不盲目觸發警報！
             continue
             
         link = entry.link['href']
@@ -46,8 +46,8 @@ try:
         if txt_response.status_code == 200:
             txt_content = txt_response.text
             
-            # 🎯 換上與大鱷雷達同級的精準狙擊鏡，徹底消滅「未知公司」
-            issuer_match = re.search(r'<SUBJECT-COMPANY>.*?<CONFORMED-NAME>([^\n]+)', txt_content, re.DOTALL)
+            # 🎯 換上 Form 144 專用雙重狙擊鏡 (同時掃描 ISSUER 與 SUBJECT-COMPANY)
+            issuer_match = re.search(r'<(?:ISSUER|SUBJECT-COMPANY)>.*?<CONFORMED-NAME>([^\n]+)', txt_content, re.DOTALL)
             issuer_name = issuer_match.group(1).strip() if issuer_match else "未知公司"
             
             msg = f"🚨 <b>【Form 144 內部高管逃生預警】</b>\n"
@@ -60,7 +60,6 @@ try:
             found_count += 1
             time.sleep(1.5)
                 
-        # 🛡️ 彈藥庫限制：每次巡邏最多只發 3 發警報，防止任何意外洗版
         if found_count >= 3:
             break
             
