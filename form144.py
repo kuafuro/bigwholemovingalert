@@ -13,11 +13,12 @@ def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     requests.get(url, params={'chat_id': CHAT_ID_WHALE, 'text': message, 'parse_mode': 'HTML'})
 
-# 🌟 V25/V26 武裝：下載 SEC 官方「身分證(CIK) 轉 股票編號(Ticker)」字典庫
+# 🌟 V27 戰略偽裝：使用您的專屬企業網域，突破 SEC 防火牆封鎖！
+SEC_HEADERS = {'User-Agent': 'WhaleRadarBot Admin@kuafuorhk.com'}
+
 def get_sec_ticker_map():
-    headers = {'User-Agent': 'WhaleRadar (your_email@example.com)'}
     try:
-        resp = requests.get("https://www.sec.gov/files/company_tickers.json", headers=headers)
+        resp = requests.get("https://www.sec.gov/files/company_tickers.json", headers=SEC_HEADERS)
         data = resp.json()
         return {str(v['cik_str']): v['ticker'] for v in data.values()}
     except Exception as e:
@@ -26,14 +27,13 @@ def get_sec_ticker_map():
 
 CIK_TICKER_MAP = get_sec_ticker_map()
 
-headers = {'User-Agent': 'WhaleRadar (your_email@example.com)'}
 url = 'https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=144&owner=only&count=40&output=atom'
 
 now_utc = datetime.now(timezone.utc)
 time_limit = now_utc - timedelta(minutes=5, seconds=30)
 
 try:
-    response = requests.get(url, headers=headers)
+    response = requests.get(url, headers=SEC_HEADERS)
     soup = BeautifulSoup(response.content, 'xml')
     entries = soup.find_all('entry')
 
@@ -54,28 +54,42 @@ try:
             
         link = entry.link['href']
         txt_link = link.replace('-index.htm', '.txt')
-        txt_response = requests.get(txt_link, headers=headers)
+        txt_response = requests.get(txt_link, headers=SEC_HEADERS)
         
         if txt_response.status_code == 200:
             txt_content = txt_response.text
             
-            # 🎯 V26 真視之眼：直接掃描 SEC 官方防偽標頭 (SGML Header)
-            # 尋找 SUBJECT COMPANY 或 ISSUER 區塊內的「公司名稱」與「公司 CIK」
-            issuer_name = "未知公司"
             ticker = "N/A"
+            issuer_name = "未知公司"
             
-            company_match = re.search(r'(?:SUBJECT COMPANY|ISSUER):.*?COMPANY CONFORMED NAME:\s*([^\n]+).*?CENTRAL INDEX KEY:\s*(\d+)', txt_content, re.DOTALL)
+            # 🎯 V27 第一重防線 (X光直擊)：直接掃描深層 XML 官方標籤，精準度 100%
+            sym_match = re.search(r'<(?:issuerSymbol|issuerTradingSymbol)>([^<]+)</(?:issuerSymbol|issuerTradingSymbol)>', txt_content, re.IGNORECASE)
+            if sym_match: ticker = sym_match.group(1).strip().upper()
             
-            if company_match:
-                issuer_name = company_match.group(1).strip()
-                cik_str = str(int(company_match.group(2).strip()))
-                ticker = CIK_TICKER_MAP.get(cik_str, "N/A")
+            name_match = re.search(r'<(?:nameOfIssuer|issuerName)>([^<]+)</(?:nameOfIssuer|issuerName)>', txt_content, re.IGNORECASE)
+            if name_match: issuer_name = name_match.group(1).strip()
             
-            # 防呆機制：如果真視之眼沒抓到，改用 XML 備用尋標器
+            # 🎯 V27 第二重防線 (隔離防護)：嚴格限制 SGML 掃描區塊，防堵人名偽裝
+            if ticker == "N/A" or issuer_name == "未知公司":
+                sgml_block = re.search(r'(?:SUBJECT COMPANY|ISSUER):(.*?)(?:FILED BY:|REPORTING-OWNER:|<SEC-DOCUMENT>|</SEC-HEADER>)', txt_content, re.DOTALL | re.IGNORECASE)
+                if sgml_block:
+                    block = sgml_block.group(1)
+                    if issuer_name == "未知公司":
+                        c_name = re.search(r'COMPANY CONFORMED NAME:\s*([^\n\r]+)', block)
+                        if c_name: issuer_name = c_name.group(1).strip()
+                    if ticker == "N/A":
+                        cik_m = re.search(r'CENTRAL INDEX KEY:\s*(\d+)', block)
+                        if cik_m:
+                            cik_str = str(int(cik_m.group(1).strip()))
+                            ticker = CIK_TICKER_MAP.get(cik_str, "N/A")
+            
+            # 🎯 V27 第三重防線 (標題備用救援)：從最外層拔出身份證轉換
             if ticker == "N/A":
-                ticker_match = re.search(r'<issuerTradingSymbol>([^<]+)</issuerTradingSymbol>', txt_content, re.IGNORECASE)
-                if ticker_match:
-                    ticker = ticker_match.group(1).strip().upper()
+                title_text = entry.title.text if entry.title else ""
+                cik_match_title = re.search(r'\((\d+)\)\s*\(Subject\)', title_text)
+                if cik_match_title:
+                     cik_str = str(int(cik_match_title.group(1)))
+                     ticker = CIK_TICKER_MAP.get(cik_str, "N/A")
             
             # 📊 呼叫 Finnhub 毫秒級 API 獲取報價
             price_str = "N/A"
