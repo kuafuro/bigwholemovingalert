@@ -74,8 +74,8 @@ def send_whale_telegram(message):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     requests.get(url, params={'chat_id': CHAT_ID_WHALE, 'text': message, 'parse_mode': 'HTML'})
 
-now_utc = datetime.now(timezone.utc)
-if now_utc.hour % 3 == 0 and now_utc.minute <= 12:
+# 🌟 將 12 改成 25，給予 GitHub 伺服器充足的塞車緩衝時間
+if now_utc.hour % 3 == 0 and now_utc.minute <= 25:
     send_test_telegram(f"✅ 報告將軍：V20 終極防禦雷達運作中！(UTC {now_utc.strftime('%H:%M')})")
 
 headers = {'User-Agent': 'MyFirstApp (your_email@example.com)'}
