@@ -1,8 +1,7 @@
 requests
 beautifulsoup4
 lxml
-google-generativeai
 yfinance
 mplfinance
 pandas
-supabase
+google-genai
