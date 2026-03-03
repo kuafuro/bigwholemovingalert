@@ -45,19 +45,23 @@ def get_sec_ticker_map():
         data = resp.json()
         return {str(v['cik_str']): v['ticker'] for v in data.values()}
     except Exception as e:
+        print(f"⚠️ 抓取 SEC ticker map 失敗: {e}")
         return {}
 
 CIK_TICKER_MAP = get_sec_ticker_map()
+print(f"📊 已載入 {len(CIK_TICKER_MAP)} 個 CIK-Ticker 對照")
+
 url = 'https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=144&owner=only&count=40&output=atom'
 
 now_utc = datetime.now(timezone.utc)
-# 🌟 2. 雷達波段拉到 30 分鐘，絕對不漏接！
 time_limit = now_utc - timedelta(minutes=30)
 
 try:
     response = requests.get(url, headers=SEC_HEADERS)
     soup = BeautifulSoup(response.content, 'xml')
     entries = soup.find_all('entry')
+    
+    print(f"📡 掃描到 {len(entries)} 個 Form 144 條目")
 
     found_count = 0
 
@@ -77,7 +81,11 @@ try:
         # 🌟 3. 資料庫防重複攔截！
         if link in seen_links:
             continue
-            
+        
+        # 🌟 修復：先從 ATOM title 提取公司名和 CIK 作為後備
+        title_text = entry.title.text if entry.title else ""
+        print(f"🔍 處理條目: {title_text[:80]}...")
+        
         txt_link = link.replace('-index.htm', '.txt')
         txt_response = requests.get(txt_link, headers=SEC_HEADERS)
         
@@ -86,32 +94,68 @@ try:
             ticker = "N/A"
             issuer_name = "未知公司"
             
-            sym_match = re.search(r'<(?:issuerSymbol|issuerTradingSymbol)>([^<]+)</(?:issuerSymbol|issuerTradingSymbol)>', txt_content, re.IGNORECASE)
-            if sym_match: ticker = sym_match.group(1).strip().upper()
+            # ===== 方法 1：從 XML 標籤解析 =====
+            sym_match = re.search(r'<(?:issuerSymbol|issuerTradingSymbol)>\s*([^<]+?)\s*</(?:issuerSymbol|issuerTradingSymbol)>', txt_content, re.IGNORECASE)
+            if sym_match: 
+                ticker = sym_match.group(1).strip().upper()
+                print(f"  ✅ XML 找到 ticker: {ticker}")
             
-            name_match = re.search(r'<(?:nameOfIssuer|issuerName)>([^<]+)</(?:nameOfIssuer|issuerName)>', txt_content, re.IGNORECASE)
-            if name_match: issuer_name = name_match.group(1).strip()
+            name_match = re.search(r'<(?:nameOfIssuer|issuerName)>\s*([^<]+?)\s*</(?:nameOfIssuer|issuerName)>', txt_content, re.IGNORECASE)
+            if name_match: 
+                issuer_name = name_match.group(1).strip()
+                print(f"  ✅ XML 找到公司名: {issuer_name}")
             
+            # ===== 方法 2：從 SGML header 的 SUBJECT COMPANY 區塊解析 =====
             if ticker == "N/A" or issuer_name == "未知公司":
-                sgml_block = re.search(r'(?:SUBJECT COMPANY|ISSUER):(.*?)(?:FILED BY:|REPORTING-OWNER:|<SEC-DOCUMENT>|</SEC-HEADER>)', txt_content, re.DOTALL | re.IGNORECASE)
+                # 🌟 修復：擴大搜索範圍，支援更多 header 格式
+                sgml_block = re.search(
+                    r'(?:SUBJECT COMPANY|ISSUER)[:\s]*(.*?)(?:FILED BY:|REPORTING-OWNER:|<SEC-DOCUMENT>|</SEC-HEADER>|\Z)', 
+                    txt_content[:5000],  # 只搜 header 部分，提高效率
+                    re.DOTALL | re.IGNORECASE
+                )
                 if sgml_block:
                     block = sgml_block.group(1)
                     if issuer_name == "未知公司":
                         c_name = re.search(r'COMPANY CONFORMED NAME:\s*([^\n\r]+)', block)
-                        if c_name: issuer_name = c_name.group(1).strip()
+                        if c_name: 
+                            issuer_name = c_name.group(1).strip()
+                            print(f"  ✅ SGML 找到公司名: {issuer_name}")
                     if ticker == "N/A":
                         cik_m = re.search(r'CENTRAL INDEX KEY:\s*(\d+)', block)
                         if cik_m:
                             cik_str = str(int(cik_m.group(1).strip()))
                             ticker = CIK_TICKER_MAP.get(cik_str, "N/A")
-                            
+                            if ticker != "N/A":
+                                print(f"  ✅ CIK {cik_str} 對照到 ticker: {ticker}")
+            
+            # ===== 方法 3：從 ATOM title 的 CIK 解析 =====
             if ticker == "N/A":
-                title_text = entry.title.text if entry.title else ""
                 cik_match_title = re.search(r'\((\d+)\)\s*\(Subject\)', title_text)
                 if cik_match_title:
-                     cik_str = str(int(cik_match_title.group(1)))
-                     ticker = CIK_TICKER_MAP.get(cik_str, "N/A")
+                    cik_str = str(int(cik_match_title.group(1)))
+                    ticker = CIK_TICKER_MAP.get(cik_str, "N/A")
+                    if ticker != "N/A":
+                        print(f"  ✅ Title CIK 對照到 ticker: {ticker}")
             
+            # ===== 方法 4：從 ATOM title 直接提取公司名 =====
+            if issuer_name == "未知公司":
+                # title 格式通常是: "144 - CompanyName (CIK) (Subject)"
+                title_name = re.search(r'144\s*-\s*(.+?)\s*\(\d+\)', title_text)
+                if title_name:
+                    issuer_name = title_name.group(1).strip()
+                    print(f"  ✅ Title 提取公司名: {issuer_name}")
+                    
+            # ===== 方法 5：從 REPORTING-OWNER 區塊的 SUBJECT COMPANY 回溯 =====
+            if issuer_name == "未知公司":
+                # 有些 Form 144 格式不同，公司名在不同位置
+                alt_name = re.search(r'COMPANY CONFORMED NAME:\s*([^\n\r]+)', txt_content[:5000])
+                if alt_name:
+                    issuer_name = alt_name.group(1).strip()
+                    print(f"  ✅ 備用方法找到公司名: {issuer_name}")
+            
+            print(f"  📋 最終結果: {issuer_name} ({ticker})")
+            
+            # ===== 取得股價 =====
             price_str = "N/A"
             change_str = "N/A"
             
@@ -129,7 +173,7 @@ try:
                             icon = "🟢" if change_pct > 0 else ("🔴" if change_pct < 0 else "⚪")
                             change_str = f"{icon} {sign}{change_pct:.2f}%"
                 except Exception as e:
-                    pass
+                    print(f"  ⚠️ Finnhub 取價失敗: {e}")
             
             msg = f"🚨 <b>【Form 144 內部高管逃生預警】</b>\n"
             msg += f"🏢 公司：<b>{issuer_name} ({ticker})</b>\n"
