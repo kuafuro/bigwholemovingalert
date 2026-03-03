@@ -1,37 +1,99 @@
+# ==================== form144.py V22 ====================
+# Engine 2: Form 144 Insider Selling Alert
+# Upgrade: Supabase + Finnhub + Gemini 3.1 Pro news search
+# =========================================================
 import requests
 from bs4 import BeautifulSoup
 import time
 from datetime import datetime, timezone, timedelta
 import os
 import re
-import gspread 
-from google.oauth2.service_account import Credentials
 import json
+from google import genai
+from google.genai import types
 
 BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
-CHAT_ID_WHALE = os.environ.get('TELEGRAM_CHAT_ID_WHALE') 
+CHAT_ID_WHALE = os.environ.get('TELEGRAM_CHAT_ID_WHALE')
 FINNHUB_API_KEY = os.environ.get('FINNHUB_API_KEY')
-GCP_CREDENTIALS = os.environ.get('GCP_CREDENTIALS')
-SPREADSHEET_ID = os.environ.get('SPREADSHEET_ID')
+GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
+SUPABASE_URL = os.environ.get('SUPABASE_URL')
+SUPABASE_KEY = os.environ.get('SUPABASE_KEY')
 
-# 🌟 1. 初始化 Google Sheets 資料庫連線
-worksheet = None
-seen_links = set()
+gemini_client = None
+if GEMINI_API_KEY:
+    gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+    print("Gemini 3.1 Pro engine ready")
 
-if GCP_CREDENTIALS and SPREADSHEET_ID:
+def supabase_insert(data):
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return False
     try:
-        creds_dict = json.loads(GCP_CREDENTIALS)
-        scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-        creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
-        gc = gspread.authorize(creds)
-        sh = gc.open_by_key(SPREADSHEET_ID)
-        worksheet = sh.sheet1 
-        
-        all_links = worksheet.col_values(7)
-        seen_links = set(all_links[-200:])
-        print("✅ DB連線成功，已武裝防重複過濾網！")
+        url = f"{SUPABASE_URL}/rest/v1/whale_alerts"
+        headers = {
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {SUPABASE_KEY}",
+            "Content-Type": "application/json",
+            "Prefer": "return=minimal"
+        }
+        resp = requests.post(url, headers=headers, json=data)
+        return resp.status_code == 201
     except Exception as e:
-        print(f"❌ DB初始化失敗: {e}")
+        print(f"  Supabase error: {e}")
+        return False
+
+def supabase_link_exists(link):
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return False
+    try:
+        url = f"{SUPABASE_URL}/rest/v1/whale_alerts?sec_link=eq.{link}&select=id&limit=1"
+        headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
+        resp = requests.get(url, headers=headers)
+        return resp.status_code == 200 and len(resp.json()) > 0
+    except:
+        return False
+
+def get_stock_quote(ticker):
+    if not FINNHUB_API_KEY or ticker == "N/A":
+        return "N/A", "N/A", 0, 0
+    try:
+        url = f"https://finnhub.io/api/v1/quote?symbol={ticker}&token={FINNHUB_API_KEY}"
+        resp = requests.get(url)
+        if resp.status_code == 200:
+            data = resp.json()
+            price = data.get('c', 0)
+            change = data.get('dp', 0)
+            if price and price > 0:
+                sign = "+" if change > 0 else ""
+                icon = "\U0001f7e2" if change > 0 else ("\U0001f534" if change < 0 else "\u26aa")
+                return f"${price:.2f}", f"{icon} {sign}{change:.2f}%", price, change
+    except:
+        pass
+    return "N/A", "N/A", 0, 0
+
+def ai_explain_selling(company_name, ticker):
+    """Use Gemini 3.1 Pro with Google Search to find news and explain selling"""
+    if not gemini_client:
+        return "\u26a0\ufe0f \u6709\u5167\u90e8\u4eba\u58eb\u5df2\u63d0\u4ea4\u62cb\u552e\u610f\u5411\u66f8\uff01"
+    try:
+        prompt = (
+            f"You are a Wall Street analyst. The company {company_name} (ticker: {ticker}) "
+            f"just had an insider file a Form 144 (intent to sell shares) with the SEC. "
+            f"Search for the latest news about this company and explain in Traditional Chinese "
+            f"why this insider might be selling. Keep it within 100 words. "
+            f"Include relevant recent news, earnings, or events. "
+            f"End with a risk assessment emoji: \U0001f534 high risk, \U0001f7e1 medium risk, \U0001f7e2 low risk."
+        )
+        response = gemini_client.models.generate_content(
+            model="gemini-3.1-pro-preview",
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                tools=[types.Tool(google_search=types.GoogleSearch())],
+            )
+        )
+        return response.text.strip()
+    except Exception as e:
+        print(f"  Gemini error: {e}")
+        return "\u26a0\ufe0f \u6709\u5167\u90e8\u4eba\u58eb\u5df2\u63d0\u4ea4\u62cb\u552e\u610f\u5411\u66f8\uff01"
 
 def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
@@ -42,17 +104,14 @@ SEC_HEADERS = {'User-Agent': 'WhaleRadarBot Admin@kuafuorhk.com'}
 def get_sec_ticker_map():
     try:
         resp = requests.get("https://www.sec.gov/files/company_tickers.json", headers=SEC_HEADERS)
-        data = resp.json()
-        return {str(v['cik_str']): v['ticker'] for v in data.values()}
-    except Exception as e:
-        print(f"⚠️ 抓取 SEC ticker map 失敗: {e}")
+        return {str(v['cik_str']): v['ticker'] for v in resp.json().values()}
+    except:
         return {}
 
 CIK_TICKER_MAP = get_sec_ticker_map()
-print(f"📊 已載入 {len(CIK_TICKER_MAP)} 個 CIK-Ticker 對照")
+print(f"Loaded {len(CIK_TICKER_MAP)} CIK-Ticker mappings")
 
 url = 'https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=144&owner=only&count=40&output=atom'
-
 now_utc = datetime.now(timezone.utc)
 time_limit = now_utc - timedelta(minutes=30)
 
@@ -60,145 +119,102 @@ try:
     response = requests.get(url, headers=SEC_HEADERS)
     soup = BeautifulSoup(response.content, 'xml')
     entries = soup.find_all('entry')
-    
-    print(f"📡 掃描到 {len(entries)} 個 Form 144 條目")
-
+    print(f"Found {len(entries)} Form 144 entries")
     found_count = 0
 
     for entry in entries:
         updated_tag = entry.find('updated')
-        if not updated_tag: continue
-        updated_str = updated_tag.text
-        
+        if not updated_tag:
+            continue
         try:
-            if datetime.fromisoformat(updated_str.replace('Z', '+00:00')).astimezone(timezone.utc) < time_limit: 
+            if datetime.fromisoformat(updated_tag.text.replace('Z', '+00:00')).astimezone(timezone.utc) < time_limit:
                 break
-        except Exception:
+        except:
             continue
-            
+
         link = entry.link['href']
-        
-        # 🌟 3. 資料庫防重複攔截！
-        if link in seen_links:
+        if supabase_link_exists(link):
             continue
-        
-        # 🌟 修復：先從 ATOM title 提取公司名和 CIK 作為後備
+
         title_text = entry.title.text if entry.title else ""
-        print(f"🔍 處理條目: {title_text[:80]}...")
-        
         txt_link = link.replace('-index.htm', '.txt')
         txt_response = requests.get(txt_link, headers=SEC_HEADERS)
-        
+
         if txt_response.status_code == 200:
             txt_content = txt_response.text
             ticker = "N/A"
-            issuer_name = "未知公司"
-            
-            # ===== 方法 1：從 XML 標籤解析 =====
-            sym_match = re.search(r'<(?:issuerSymbol|issuerTradingSymbol)>\s*([^<]+?)\s*</(?:issuerSymbol|issuerTradingSymbol)>', txt_content, re.IGNORECASE)
-            if sym_match: 
-                ticker = sym_match.group(1).strip().upper()
-                print(f"  ✅ XML 找到 ticker: {ticker}")
-            
-            name_match = re.search(r'<(?:nameOfIssuer|issuerName)>\s*([^<]+?)\s*</(?:nameOfIssuer|issuerName)>', txt_content, re.IGNORECASE)
-            if name_match: 
-                issuer_name = name_match.group(1).strip()
-                print(f"  ✅ XML 找到公司名: {issuer_name}")
-            
-            # ===== 方法 2：從 SGML header 的 SUBJECT COMPANY 區塊解析 =====
-            if ticker == "N/A" or issuer_name == "未知公司":
-                # 🌟 修復：擴大搜索範圍，支援更多 header 格式
-                sgml_block = re.search(
-                    r'(?:SUBJECT COMPANY|ISSUER)[:\s]*(.*?)(?:FILED BY:|REPORTING-OWNER:|<SEC-DOCUMENT>|</SEC-HEADER>|\Z)', 
-                    txt_content[:5000],  # 只搜 header 部分，提高效率
-                    re.DOTALL | re.IGNORECASE
-                )
-                if sgml_block:
-                    block = sgml_block.group(1)
-                    if issuer_name == "未知公司":
-                        c_name = re.search(r'COMPANY CONFORMED NAME:\s*([^\n\r]+)', block)
-                        if c_name: 
-                            issuer_name = c_name.group(1).strip()
-                            print(f"  ✅ SGML 找到公司名: {issuer_name}")
+            issuer_name = "\u672a\u77e5\u516c\u53f8"
+
+            # Method 1: XML tags
+            sym = re.search(r'<(?:issuerSymbol|issuerTradingSymbol)>\s*([^<]+?)\s*</(?:issuerSymbol|issuerTradingSymbol)>', txt_content, re.IGNORECASE)
+            if sym:
+                ticker = sym.group(1).strip().upper()
+            nm = re.search(r'<(?:nameOfIssuer|issuerName)>\s*([^<]+?)\s*</(?:nameOfIssuer|issuerName)>', txt_content, re.IGNORECASE)
+            if nm:
+                issuer_name = nm.group(1).strip()
+
+            # Method 2: SGML header
+            if ticker == "N/A" or issuer_name == "\u672a\u77e5\u516c\u53f8":
+                sgml = re.search(r'(?:SUBJECT COMPANY|ISSUER)[:\s]*(.*?)(?:FILED BY:|REPORTING-OWNER:|<SEC-DOCUMENT>|</SEC-HEADER>|\Z)', txt_content[:5000], re.DOTALL | re.IGNORECASE)
+                if sgml:
+                    block = sgml.group(1)
+                    if issuer_name == "\u672a\u77e5\u516c\u53f8":
+                        cn = re.search(r'COMPANY CONFORMED NAME:\s*([^\n\r]+)', block)
+                        if cn:
+                            issuer_name = cn.group(1).strip()
                     if ticker == "N/A":
-                        cik_m = re.search(r'CENTRAL INDEX KEY:\s*(\d+)', block)
-                        if cik_m:
-                            cik_str = str(int(cik_m.group(1).strip()))
-                            ticker = CIK_TICKER_MAP.get(cik_str, "N/A")
-                            if ticker != "N/A":
-                                print(f"  ✅ CIK {cik_str} 對照到 ticker: {ticker}")
-            
-            # ===== 方法 3：從 ATOM title 的 CIK 解析 =====
+                        ck = re.search(r'CENTRAL INDEX KEY:\s*(\d+)', block)
+                        if ck:
+                            ticker = CIK_TICKER_MAP.get(str(int(ck.group(1).strip())), "N/A")
+
+            # Method 3: Title CIK
             if ticker == "N/A":
-                cik_match_title = re.search(r'\((\d+)\)\s*\(Subject\)', title_text)
-                if cik_match_title:
-                    cik_str = str(int(cik_match_title.group(1)))
-                    ticker = CIK_TICKER_MAP.get(cik_str, "N/A")
-                    if ticker != "N/A":
-                        print(f"  ✅ Title CIK 對照到 ticker: {ticker}")
-            
-            # ===== 方法 4：從 ATOM title 直接提取公司名 =====
-            if issuer_name == "未知公司":
-                # title 格式通常是: "144 - CompanyName (CIK) (Subject)"
-                title_name = re.search(r'144\s*-\s*(.+?)\s*\(\d+\)', title_text)
-                if title_name:
-                    issuer_name = title_name.group(1).strip()
-                    print(f"  ✅ Title 提取公司名: {issuer_name}")
-                    
-            # ===== 方法 5：從 REPORTING-OWNER 區塊的 SUBJECT COMPANY 回溯 =====
-            if issuer_name == "未知公司":
-                # 有些 Form 144 格式不同，公司名在不同位置
-                alt_name = re.search(r'COMPANY CONFORMED NAME:\s*([^\n\r]+)', txt_content[:5000])
-                if alt_name:
-                    issuer_name = alt_name.group(1).strip()
-                    print(f"  ✅ 備用方法找到公司名: {issuer_name}")
-            
-            print(f"  📋 最終結果: {issuer_name} ({ticker})")
-            
-            # ===== 取得股價 =====
-            price_str = "N/A"
-            change_str = "N/A"
-            
-            if ticker != "N/A" and FINNHUB_API_KEY:
-                try:
-                    finnhub_url = f"https://finnhub.io/api/v1/quote?symbol={ticker}&token={FINNHUB_API_KEY}"
-                    fh_resp = requests.get(finnhub_url)
-                    if fh_resp.status_code == 200:
-                        data = fh_resp.json()
-                        current_price = data.get('c', 0) 
-                        change_pct = data.get('dp', 0)   
-                        if current_price and current_price > 0:
-                            price_str = f"${current_price:.2f}"
-                            sign = "+" if change_pct > 0 else ""
-                            icon = "🟢" if change_pct > 0 else ("🔴" if change_pct < 0 else "⚪")
-                            change_str = f"{icon} {sign}{change_pct:.2f}%"
-                except Exception as e:
-                    print(f"  ⚠️ Finnhub 取價失敗: {e}")
-            
-            msg = f"🚨 <b>【Form 144 內部高管逃生預警】</b>\n"
-            msg += f"🏢 公司：<b>{issuer_name} ({ticker})</b>\n"
-            msg += f"💲 股價：<b>{price_str}</b>\n"
-            msg += f"📊 升跌幅：<b>{change_str}</b>\n"
-            msg += f"⚠️ <b>注意：有內部人士已提交拋售意向書！</b>\n"
-            msg += f"🔗 <a href='{link}'>查看 SEC 原文</a>"
-            
+                cm = re.search(r'\((\d+)\)\s*\(Subject\)', title_text)
+                if cm:
+                    ticker = CIK_TICKER_MAP.get(str(int(cm.group(1))), "N/A")
+
+            # Method 4: Title name
+            if issuer_name == "\u672a\u77e5\u516c\u53f8":
+                tn = re.search(r'144\s*-\s*(.+?)\s*\(\d+\)', title_text)
+                if tn:
+                    issuer_name = tn.group(1).strip()
+
+            # Method 5: Fallback
+            if issuer_name == "\u672a\u77e5\u516c\u53f8":
+                alt = re.search(r'COMPANY CONFORMED NAME:\s*([^\n\r]+)', txt_content[:5000])
+                if alt:
+                    issuer_name = alt.group(1).strip()
+
+            print(f"  {issuer_name} ({ticker})")
+
+            price_str, change_str, current_price, change_pct = get_stock_quote(ticker)
+            ai_analysis = ai_explain_selling(issuer_name, ticker)
+
+            msg = "\U0001f6a8 <b>\u3010Form 144 \u5167\u90e8\u9ad8\u7ba1\u9003\u751f\u9810\u8b66\u3011</b>\n"
+            msg += f"\U0001f3e2 \u516c\u53f8\uff1a<b>{issuer_name} ({ticker})</b>\n"
+            msg += f"\U0001f4b2 \u80a1\u50f9\uff1a<b>{price_str}</b>\n"
+            msg += f"\U0001f4ca \u5347\u8dcc\u5e45\uff1a<b>{change_str}</b>\n"
+            msg += f"\U0001f9e0 <b>AI \u5206\u6790\uff1a</b>\n{ai_analysis}\n"
+            msg += f"\U0001f517 <a href='{link}'>\u67e5\u770b SEC \u539f\u6587</a>"
+
             send_telegram_message(msg)
-            
-            # 🌟 4. 發送成功後寫入資料庫
-            if worksheet:
-                try:
-                    time_str = datetime.now(timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S')
-                    row_data = [time_str, ticker, issuer_name, "⚠️ Form 144 拋售預警", "", "", link]
-                    worksheet.append_row(row_data)
-                    seen_links.add(link) 
-                except Exception as e:
-                    print(f"寫入 DB 失敗: {e}")
-            
+
+            supabase_insert({
+                "source": "form144",
+                "ticker": ticker,
+                "company_name": issuer_name,
+                "action": "\u26a0\ufe0f Form 144 \u62cb\u552e\u9810\u8b66",
+                "price": current_price,
+                "change_pct": change_pct,
+                "ai_summary": ai_analysis,
+                "sec_link": link
+            })
+
             found_count += 1
-            time.sleep(1.5)
-                
-        if found_count >= 5: 
+            time.sleep(2)
+
+        if found_count >= 5:
             break
-            
+
 except Exception as e:
-    print(f"Form 144 執行失敗: {e}")
+    print(f"Form 144 engine error: {e}")
