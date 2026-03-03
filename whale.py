@@ -1,84 +1,127 @@
-# ==================== 程式碼開始 ====================
+# ==================== whale.py V22 全面升級版 ====================
+# 引擎一：Form 4 大鯨魚警報
+# 升級：Supabase + Finnhub + 新版 Gemini SDK + 防重複
+# ================================================================
 import requests
 from bs4 import BeautifulSoup
 import time
 from datetime import datetime, timezone, timedelta
-import os  
+import os
 import yfinance as yf
 import mplfinance as mpf
 import pandas as pd
-import gspread 
-from google.oauth2.service_account import Credentials
 import json
 
 BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
-CHAT_ID_TEST = os.environ.get('TELEGRAM_CHAT_ID_TEST')   
-CHAT_ID_WHALE = os.environ.get('TELEGRAM_CHAT_ID_WHALE') 
+CHAT_ID_TEST = os.environ.get('TELEGRAM_CHAT_ID_TEST')
+CHAT_ID_WHALE = os.environ.get('TELEGRAM_CHAT_ID_WHALE')
+FINNHUB_API_KEY = os.environ.get('FINNHUB_API_KEY')
+SUPABASE_URL = os.environ.get('SUPABASE_URL')
+SUPABASE_KEY = os.environ.get('SUPABASE_KEY')
 
-MIN_WHALE_AMOUNT = 500000  
-STRICT_WATCHLIST = True    
+MIN_WHALE_AMOUNT = 500000
+STRICT_WATCHLIST = True
 
-GCP_CREDENTIALS = os.environ.get('GCP_CREDENTIALS')
-SPREADSHEET_ID = os.environ.get('SPREADSHEET_ID')
-worksheet = None
+now_utc = datetime.now(timezone.utc)
 
-if GCP_CREDENTIALS and SPREADSHEET_ID:
+# ===== Supabase 工具函數 =====
+def supabase_insert(data):
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return False
     try:
-        creds_dict = json.loads(GCP_CREDENTIALS)
-        scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-        creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
-        gc = gspread.authorize(creds)
-        sh = gc.open_by_key(SPREADSHEET_ID)
-        worksheet = sh.sheet1 
-        print("✅ Google Sheets 連線成功！")
+        url = f"{SUPABASE_URL}/rest/v1/whale_alerts"
+        headers = {
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {SUPABASE_KEY}",
+            "Content-Type": "application/json",
+            "Prefer": "return=minimal"
+        }
+        resp = requests.post(url, headers=headers, json=data)
+        if resp.status_code == 201:
+            return True
+        elif resp.status_code == 409:
+            print(f"  ⏭️ 重複記錄，已跳過")
+            return False
+        else:
+            print(f"  ⚠️ Supabase 寫入失敗: {resp.status_code} - {resp.text[:200]}")
+            return False
     except Exception as e:
-        print(f"❌ Google Sheets 初始化失敗: {e}")
+        print(f"  ⚠️ Supabase 錯誤: {e}")
+        return False
 
+def supabase_link_exists(link):
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return False
+    try:
+        url = f"{SUPABASE_URL}/rest/v1/whale_alerts?sec_link=eq.{link}&select=id&limit=1"
+        headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
+        resp = requests.get(url, headers=headers)
+        return resp.status_code == 200 and len(resp.json()) > 0
+    except:
+        return False
+
+# ===== Finnhub 股價查詢 =====
+def get_stock_quote(ticker):
+    if not FINNHUB_API_KEY or ticker == "N/A":
+        return "N/A", "N/A", 0, 0
+    try:
+        url = f"https://finnhub.io/api/v1/quote?symbol={ticker}&token={FINNHUB_API_KEY}"
+        resp = requests.get(url)
+        if resp.status_code == 200:
+            data = resp.json()
+            price = data.get('c', 0)
+            change = data.get('dp', 0)
+            if price and price > 0:
+                sign = "+" if change > 0 else ""
+                icon = "\U0001f7e2" if change > 0 else ("\U0001f534" if change < 0 else "\u26aa")
+                return f"${price:.2f}", f"{icon} {sign}{change:.2f}%", price, change
+    except Exception as e:
+        print(f"  \u26a0\ufe0f Finnhub error: {e}")
+    return "N/A", "N/A", 0, 0
+
+# ===== S&P 500 清單 =====
 def get_sp500_tickers():
     try:
         url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        response = requests.get(url, headers=headers)
-        soup = BeautifulSoup(response.text, 'html.parser')
+        resp = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'})
+        soup = BeautifulSoup(resp.text, 'html.parser')
         tickers = set()
         for row in soup.find('table', {'id': 'constituents'}).find_all('tr')[1:]:
-            ticker = row.find_all('td')[0].text.strip()
-            tickers.add(ticker); tickers.add(ticker.replace('.', '-'))
+            t = row.find_all('td')[0].text.strip()
+            tickers.add(t)
+            tickers.add(t.replace('.', '-'))
         return tickers
     except Exception as e:
-        print(f"⚠️ 抓取 S&P 500 列表失敗: {e}")
+        print(f"\u26a0\ufe0f S&P 500 list failed: {e}")
         return set()
 
 SP500_TICKERS = get_sp500_tickers()
 
-# 🌟 修復：now_utc 必須在心跳檢查之前定義！（原本這行在太後面，導致 NameError）
-now_utc = datetime.now(timezone.utc)
-
+# ===== Telegram =====
 def send_test_telegram(message):
     if not CHAT_ID_TEST:
-        print("⚠️ 未設定 TELEGRAM_CHAT_ID_TEST")
         return
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    response = requests.get(url, params={'chat_id': CHAT_ID_TEST, 'text': message})
-    if response.status_code == 200:
-        print(f"📡 心跳發送成功！測試頻道 ID: {CHAT_ID_TEST}")
+    resp = requests.get(url, params={'chat_id': CHAT_ID_TEST, 'text': message})
+    if resp.status_code == 200:
+        print(f"\U0001f4e1 Heartbeat sent")
     else:
-        print(f"❌ 心跳發送失敗！錯誤碼: {response.status_code}, 原因: {response.text}")
+        print(f"\u274c Heartbeat failed: {resp.status_code}")
 
 def send_telegram_photo(caption, photo_path):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
     with open(photo_path, 'rb') as photo:
-        payload = {'chat_id': CHAT_ID_WHALE, 'caption': caption, 'parse_mode': 'HTML'}
-        requests.post(url, data=payload, files={'photo': photo})
-        
+        requests.post(url, data={'chat_id': CHAT_ID_WHALE, 'caption': caption, 'parse_mode': 'HTML'}, files={'photo': photo})
+
 def send_whale_telegram(message):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     requests.get(url, params={'chat_id': CHAT_ID_WHALE, 'text': message, 'parse_mode': 'HTML'})
 
-# 🌟 心跳檢查（now_utc 已在上方定義，不會再 NameError）
+# ===== Heartbeat =====
 if now_utc.hour % 3 == 0 and now_utc.minute <= 25:
-    send_test_telegram(f"✅ 報告將軍：V21 全面修復版雷達運作中！(UTC {now_utc.strftime('%H:%M')})")
+    send_test_telegram(f"\u2705 V22 Whale Radar online! (UTC {now_utc.strftime('%H:%M')})")
 
+# ===== Main =====
 headers = {'User-Agent': 'WhaleRadarBot Admin@kuafuorhk.com'}
 url = 'https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=4&owner=only&count=40&output=atom'
 time_limit = now_utc - timedelta(minutes=15)
@@ -87,119 +130,126 @@ try:
     response = requests.get(url, headers=headers)
     soup = BeautifulSoup(response.content, 'xml')
     entries = soup.find_all('entry')
-
+    print(f"\U0001f4e1 Found {len(entries)} Form 4 entries")
     found_count = 0
 
     for entry in entries:
         link = entry.link['href']
         updated_str = entry.updated.text
-        
+
         try:
-            if datetime.fromisoformat(updated_str.replace('Z', '+00:00')).astimezone(timezone.utc) < time_limit: 
-                break 
-        except Exception as e:
-            print(f"時間解析失敗: {e}")
-            continue  # 🌟 修復：原本用 pass 會繼續處理時間無效的條目
+            if datetime.fromisoformat(updated_str.replace('Z', '+00:00')).astimezone(timezone.utc) < time_limit:
+                break
+        except:
+            continue
+
+        if supabase_link_exists(link):
+            continue
 
         txt_link = link.replace('-index.htm', '.txt')
         txt_response = requests.get(txt_link, headers=headers)
-        
+
         if txt_response.status_code == 200:
             xml_soup = BeautifulSoup(txt_response.content, 'xml')
             try:
-                issuer_name = xml_soup.find('issuerName').text if xml_soup.find('issuerName') else "未知公司"
-                reporter_name = xml_soup.find('rptOwnerName').text if xml_soup.find('rptOwnerName') else "未知高管"
-                
+                issuer_name = xml_soup.find('issuerName').text if xml_soup.find('issuerName') else "Unknown"
+                reporter_name = xml_soup.find('rptOwnerName').text if xml_soup.find('rptOwnerName') else "Unknown"
                 ticker_tag = xml_soup.find('issuerTradingSymbol')
                 ticker = ticker_tag.text.strip().upper() if ticker_tag else "N/A"
-                
+
                 if STRICT_WATCHLIST and SP500_TICKERS and (ticker not in SP500_TICKERS):
                     continue
-                
+
                 transactions = xml_soup.find_all('nonDerivativeTransaction')
                 if transactions:
-                    msg = f"🐳 <b>【頂級大鯨魚警報】</b>\n🏢 {issuer_name} (${ticker})\n👤 {reporter_name}\n"
-                    is_whale = False 
-                    target_price = 0 
-                    
+                    price_str, change_str, current_price, change_pct = get_stock_quote(ticker)
+
+                    msg = f"\U0001f40b <b>\u3010\u9802\u7d1a\u5927\u9be8\u9b5a\u8b66\u5831\u3011</b>\n"
+                    msg += f"\U0001f3e2 {issuer_name} (${ticker})\n"
+                    msg += f"\U0001f464 {reporter_name}\n"
+                    msg += f"\U0001f4b2 \u80a1\u50f9: <b>{price_str}</b>  {change_str}\n"
+                    is_whale = False
+                    target_price = 0
+
                     for txn in transactions:
                         coding_tag = txn.find('transactionCoding')
                         tx_code = coding_tag.find('transactionCode').text if coding_tag and coding_tag.find('transactionCode') else ""
-                        
-                        if tx_code not in ['P', 'S']: continue
+                        if tx_code not in ['P', 'S']:
+                            continue
 
                         shares_tag = txn.find('transactionShares')
                         shares_str = shares_tag.find('value').text if shares_tag and shares_tag.find('value') else "0"
                         price_tag = txn.find('transactionPricePerShare')
-                        price_str = price_tag.find('value').text if price_tag and price_tag.find('value') else "0"
-                        
-                        post_shares_tag = txn.find('sharesOwnedFollowingTransaction')
-                        post_shares_str = post_shares_tag.find('value').text if post_shares_tag and post_shares_tag.find('value') else "-1"
-                        
+                        price_val_str = price_tag.find('value').text if price_tag and price_tag.find('value') else "0"
+                        post_tag = txn.find('sharesOwnedFollowingTransaction')
+                        post_str = post_tag.find('value').text if post_tag and post_tag.find('value') else "-1"
+
                         try:
                             shares = float(shares_str)
-                            price = float(price_str)
-                            post_shares = float(post_shares_str)
+                            price = float(price_val_str)
+                            post_shares = float(post_str)
                             total_value = shares * price
-                            target_price = price 
+                            target_price = price
                         except:
                             total_value = 0
                             post_shares = -1
-                            
-                        action = "🟢 買入" if tx_code == 'P' else "🔴 賣出"
-                        
+
+                        action = "\U0001f7e2 \u8cb7\u5165" if tx_code == 'P' else "\U0001f534 \u8ce3\u51fa"
                         intent_label = ""
                         if tx_code == 'P' and shares == post_shares and shares > 0:
-                            intent_label = "\n🚀 【強烈看多：首次新建倉！】"
+                            intent_label = "\n\U0001f680 \u3010\u5f37\u70c8\u770b\u591a\uff1a\u9996\u6b21\u65b0\u5efa\u5009\uff01\u3011"
                         elif tx_code == 'S' and post_shares == 0:
-                            intent_label = "\n💀 【強烈看空：已清倉跳船！】"
-                        
+                            intent_label = "\n\U0001f480 \u3010\u5f37\u70c8\u770b\u7a7a\uff1a\u5df2\u6e05\u5009\u8df3\u8239\uff01\u3011"
+
                         if total_value >= MIN_WHALE_AMOUNT:
                             is_whale = True
-                            msg += f"👉 {action}: {shares:,.0f} 股\n💰 總額: ${total_value:,.0f} (@${price}){intent_label}\n"
-                            
-                            if worksheet:
-                                try:
-                                    time_str = datetime.now(timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S')
-                                    row_data = [time_str, ticker, issuer_name, action, shares, total_value, link]
-                                    worksheet.append_row(row_data)
-                                except Exception as e:
-                                    print(f"寫入 Google 表格失敗: {e}")
-                    
-                    msg += f"🔗 <a href='{link}'>查看 SEC 來源</a>"
-                    
+                            msg += f"\U0001f449 {action}: {shares:,.0f} \u80a1\n\U0001f4b0 \u7e3d\u984d: ${total_value:,.0f} (@${price}){intent_label}\n"
+
+                            supabase_insert({
+                                "source": "form4",
+                                "ticker": ticker,
+                                "company_name": issuer_name,
+                                "action": action,
+                                "reporter_name": reporter_name,
+                                "shares": shares,
+                                "total_value": total_value,
+                                "price": current_price,
+                                "change_pct": change_pct,
+                                "sec_link": link,
+                                "extra_data": json.dumps({"intent": intent_label.strip(), "tx_price": price})
+                            })
+
+                    msg += f"\U0001f517 <a href='{link}'>\u67e5\u770b SEC \u4f86\u6e90</a>"
+
                     if is_whale:
                         try:
                             end_date = datetime.now()
                             start_date = end_date - timedelta(days=180)
                             df = yf.download(ticker, start=start_date, end=end_date, progress=False)
-                            
                             if isinstance(df.columns, pd.MultiIndex):
                                 df.columns = df.columns.droplevel(1)
-                            
                             if not df.empty:
                                 filename = f"{ticker}_chart.png"
-                                mpf.plot(df, type='candle', style='charles', 
-                                         title=f"{ticker} 6-Month K-Line (Whale Price: ${target_price})", 
+                                mpf.plot(df, type='candle', style='charles',
+                                         title=f"{ticker} 6M K-Line (Whale: ${target_price})",
                                          hlines=dict(hlines=[target_price], colors=['r'], linestyle='--'),
                                          savefig=filename)
-                                
                                 send_telegram_photo(msg, filename)
-                                os.remove(filename) 
+                                os.remove(filename)
                             else:
                                 send_whale_telegram(msg)
                         except Exception as e:
-                            print(f"畫圖失敗: {e}")
-                            send_whale_telegram(msg) 
-                            
+                            print(f"Chart error: {e}")
+                            send_whale_telegram(msg)
+
                         found_count += 1
                         time.sleep(1.5)
             except Exception as e:
-                print(f"解析 Form 4 條目失敗: {e}")
-                
+                print(f"Parse error: {e}")
+
         if found_count >= 3:
             break
 
 except Exception as e:
-    print(f"Form 4 執行失敗: {e}")
-# ==================== 程式碼結束 ====================
+    print(f"Form 4 engine error: {e}")
+# ==================== END ====================
