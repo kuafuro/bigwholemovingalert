@@ -9,7 +9,7 @@ import os, json, uuid, time
 from google import genai
 from google.genai import types
 
-BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
+BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN_PRIVATE') or os.environ.get('TELEGRAM_BOT_TOKEN')
 CHAT_ID_PRIVATE = os.environ.get('TELEGRAM_CHAT_ID_PRIVATE')
 FINNHUB_API_KEY = os.environ.get('FINNHUB_API_KEY')
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
@@ -240,7 +240,7 @@ if gemini_client:
             f"\u7981 markdown\u3002\u7c21\u6f54\u76f4\u63a5\u3002"
         )
         ai_resp = gemini_client.models.generate_content(
-            model="gemini-3.1-pro-preview", contents=ai_prompt,
+            model="gemini-3-pro-preview", contents=ai_prompt,
             config=types.GenerateContentConfig(tools=[types.Tool(google_search=types.GoogleSearch())]))
         msg += f"\n\U0001f9e0 <b>AI \u5e02\u5834\u89c0\u5bdf</b>\n{ai_resp.text.strip()}\n"
     except Exception as e:
