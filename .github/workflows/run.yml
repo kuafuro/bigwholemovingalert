@@ -1,7 +1,8 @@
 name: 5-Minute Whale Alert
 on:
   schedule:
-    - cron: '1,6,11,16,21,26,31,36,41,46,51,56 * * * *'
+    # Every 5 min, Mon-Fri, UTC 13:00-21:00 (= ET 09:00-17:00, covers pre/post-market too)
+    - cron: '1,6,11,16,21,26,31,36,41,46,51,56 13-21 * * 1-5'
   workflow_dispatch:
 jobs:
   build:
