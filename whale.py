@@ -205,23 +205,27 @@ try:
                             is_whale = True
                             msg += f"\U0001f449 {action}: {shares:,.0f} \u80a1\n\U0001f4b0 \u7e3d\u984d: ${total_value:,.0f} (@${price}){intent_label}\n"
 
-                            supabase_insert({
-                                "source": "form4",
-                                "ticker": ticker,
-                                "company_name": issuer_name,
-                                "action": action,
-                                "reporter_name": reporter_name,
-                                "shares": shares,
-                                "total_value": total_value,
-                                "price": current_price,
-                                "change_pct": change_pct,
-                                "sec_link": link,
-                                "extra_data": json.dumps({"intent": intent_label.strip(), "tx_price": price})
-                            })
-
                     msg += f"\U0001f517 <a href='{link}'>\u67e5\u770b SEC \u4f86\u6e90</a>"
 
                     if is_whale:
+                        # Write to DB FIRST to prevent duplicates
+                        inserted = supabase_insert({
+                            "source": "form4",
+                            "ticker": ticker,
+                            "company_name": issuer_name,
+                            "action": action,
+                            "reporter_name": reporter_name,
+                            "shares": shares,
+                            "total_value": total_value,
+                            "price": current_price,
+                            "change_pct": change_pct,
+                            "sec_link": link,
+                            "extra_data": json.dumps({"intent": intent_label.strip(), "tx_price": price})
+                        })
+                        if not inserted:
+                            print(f"    Skipped: already in DB or insert failed")
+                            continue
+
                         try:
                             end_date = datetime.now()
                             start_date = end_date - timedelta(days=180)
