@@ -47,7 +47,7 @@ async def generate_briefing() -> str:
     return "\n".join(lines)
 
 
-def schedule_daily_briefings(app: Application):
+async def schedule_daily_briefings(app: Application):
     global _scheduler
     _scheduler = AsyncIOScheduler(timezone="Asia/Hong_Kong")
 
