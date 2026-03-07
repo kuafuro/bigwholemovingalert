@@ -76,8 +76,10 @@ def main():
         price_str, change_str, cur_price, chg_pct = get_stock_quote(ticker)
 
         prompt = (
-            "This is a partial US SEC 8-K filing. Act as a professional Wall Street analyst. "
-            "Summarize the key points in Traditional Chinese in 3-5 sentences. "
+            "This is a partial US SEC 8-K filing. Act as a professional Wall Street analyst.\n"
+            "If the filing contains only XBRL tags, boilerplate headers, or no substantive financial/business content, "
+            "reply with exactly one word: SKIP\n"
+            "Otherwise summarize the key points in Traditional Chinese in 3-5 sentences. "
             "Judge if bullish, bearish, or neutral. Use emoji: 🚀 bullish, 📉 bearish, 😐 neutral.\n\n"
             f"Filing:\n{content[:15000]}"
         )
@@ -87,6 +89,14 @@ def main():
                 config=types.GenerateContentConfig(http_options=types.HttpOptions(timeout=20000))
             )
             summary = ai_resp.text.strip()
+            if summary.upper() == "SKIP":
+                print(f"  Skipped (no content): {company} ({ticker})")
+                supabase_insert({
+                    "source": "8k", "ticker": ticker, "company_name": company,
+                    "action": "8-K", "price": cur_price, "change_pct": chg_pct,
+                    "ai_summary": "SKIP", "sentiment": "neutral", "sec_link": link
+                })
+                continue
             sentiment = "bullish" if "🚀" in summary else ("bearish" if "📉" in summary else "neutral")
 
             msg = "🤖 <b>【AI 8-K 財報秒讀機】</b>\n"
