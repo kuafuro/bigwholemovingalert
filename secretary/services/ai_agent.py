@@ -239,7 +239,7 @@ class SecretaryAgent:
         # Handle function calling loop (max 5 rounds)
         for _ in range(5):
             fn_calls = [p for p in response.candidates[0].content.parts
-                        if hasattr(p, 'function_call') and p.function_call.name]
+                        if hasattr(p, 'function_call') and p.function_call and p.function_call.name]
             if not fn_calls:
                 break
 
