@@ -30,7 +30,7 @@ def main():
     app.add_handler(CommandHandler("setting", setting_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    schedule_daily_briefings(app)
+    app.post_init = schedule_daily_briefings
 
     logger.info("🤖 Secretary Bot starting...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
