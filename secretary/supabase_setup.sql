@@ -1,4 +1,25 @@
 -- Run this in your Supabase SQL Editor
+
+-- Whale alerts (written by whale.py / form144.py / institutional.py)
+CREATE TABLE IF NOT EXISTS whale_alerts (
+    id          UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    source      TEXT,
+    ticker      TEXT,
+    company_name TEXT,
+    action      TEXT,
+    reporter_name TEXT,
+    shares      NUMERIC,
+    total_value NUMERIC,
+    price       NUMERIC,
+    change_pct  NUMERIC,
+    sec_link    TEXT UNIQUE,
+    extra_data  TEXT,
+    created_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_whale_alerts_created_at ON whale_alerts(created_at);
+CREATE INDEX IF NOT EXISTS idx_whale_alerts_ticker     ON whale_alerts(ticker);
+
 -- Creates the secretary_tasks table
 
 CREATE TABLE IF NOT EXISTS secretary_tasks (
