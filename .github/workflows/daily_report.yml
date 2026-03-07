@@ -1,8 +1,8 @@
 name: Daily Portfolio Report
 on:
   schedule:
-    # HKT 07:00 = UTC 23:00 (previous day) -> post-close (Mon-Fri + Sat morning)
-    - cron: '0 23 * * 0-5'
+    # HKT 07:00 = UTC 23:00 (previous day) -> post-close
+    - cron: '0 23 * * 0-4'
     # HKT 21:00 = UTC 13:00 -> pre-open
     - cron: '0 13 * * 1-5'
   workflow_dispatch:
@@ -17,7 +17,7 @@ jobs:
         with:
           python-version: '3.10'
       - name: Install dependencies
-        run: pip install requests google-genai
+        run: pip install requests google-genai pandas_market_calendars
       - name: "Daily Portfolio Report"
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
