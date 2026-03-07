@@ -91,7 +91,6 @@ def ai_explain_selling(company_name, ticker, sector, market_cap_m):
         resp = gemini_client.models.generate_content(
             model="gemini-3.1-pro-preview", contents=prompt,
             config=types.GenerateContentConfig(
-                tools=[types.Tool(google_search=types.GoogleSearch())],
                 http_options=types.HttpOptions(timeout=20000),
             ))
         return resp.text.strip()
