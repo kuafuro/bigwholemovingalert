@@ -172,7 +172,7 @@ class SecretaryAgent:
     def _get_session(self, chat_id: int):
         if chat_id not in self.sessions:
             self.sessions[chat_id] = self.client.chats.create(
-                model="gemini-3.1-flash-lite-preview",
+                model="gemini-3.1-pro-preview",
                 config=types.GenerateContentConfig(
                     tools=TOOLS,
                     system_instruction=SYSTEM_PROMPT,
