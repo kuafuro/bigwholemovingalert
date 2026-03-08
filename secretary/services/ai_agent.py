@@ -27,7 +27,7 @@ def _get_task_store(chat_id: int) -> TaskStore:
         _task_stores[chat_id] = TaskStore(chat_id=chat_id)
     return _task_stores[chat_id]
 
-SYSTEM_PROMPT = """你是一位專業、高效的 AI 秘書，名字叫「小秘」。你的僱主是你唯一的用戶。
+SYSTEM_PROMPT = """你是一位專業、高效的 AI 秘書，名字叫「C.C.」。你的僱主是你唯一的用戶。
 
 你的職責：
 1. 管理行程 - 透過 Google Calendar 安排、查詢、刪除會議和事件
