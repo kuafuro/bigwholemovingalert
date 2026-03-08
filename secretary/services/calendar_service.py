@@ -66,7 +66,7 @@ class CalendarService:
                     t = datetime.fromisoformat(start).astimezone(HKT).strftime('%H:%M')
                 else:
                     t = '全天'
-                lines.append(f"  • {t} {e.get('summary', '（無標題）')}")
+                lines.append(f"  • {t} {e.get('summary', '（無標題）')} [ID:{e['id']}]")
             return "\n".join(lines)
         except Exception as e:
             return f"查詢失敗：{e}"
@@ -89,3 +89,50 @@ class CalendarService:
             return f"✅ 已新增：{title}（{date} {time}，{duration_minutes}分鐘）\nID: {created['id']}"
         except Exception as e:
             return f"新增失敗：{e}"
+
+    def update_event(self, event_id: str, title: str = None, date: str = None,
+                     time: str = None, duration_minutes: int = None,
+                     description: str = None) -> str:
+        service = self._get_service()
+        if not service:
+            return "⚠️ Google Calendar 未連接"
+        try:
+            event = service.events().get(calendarId='primary', eventId=event_id).execute()
+            if title:
+                event['summary'] = title
+            if description is not None:
+                event['description'] = description
+            if date or time:
+                # Rebuild start/end from existing or new values
+                old_start = event['start'].get('dateTime', '')
+                if old_start:
+                    old_dt = datetime.fromisoformat(old_start).astimezone(HKT)
+                    use_date = date or old_dt.strftime('%Y-%m-%d')
+                    use_time = time or old_dt.strftime('%H:%M')
+                    if duration_minutes is None:
+                        old_end = event['end'].get('dateTime', '')
+                        end_dt = datetime.fromisoformat(old_end).astimezone(HKT)
+                        duration_minutes = int((end_dt - old_dt).total_seconds() // 60)
+                    start_dt = datetime.strptime(f"{use_date} {use_time}", '%Y-%m-%d %H:%M').replace(tzinfo=HKT)
+                    end_dt = start_dt + timedelta(minutes=duration_minutes)
+                    event['start'] = {'dateTime': start_dt.isoformat(), 'timeZone': 'Asia/Hong_Kong'}
+                    event['end'] = {'dateTime': end_dt.isoformat(), 'timeZone': 'Asia/Hong_Kong'}
+            elif duration_minutes is not None:
+                old_start = event['start'].get('dateTime', '')
+                start_dt = datetime.fromisoformat(old_start).astimezone(HKT)
+                end_dt = start_dt + timedelta(minutes=duration_minutes)
+                event['end'] = {'dateTime': end_dt.isoformat(), 'timeZone': 'Asia/Hong_Kong'}
+            updated = service.events().update(calendarId='primary', eventId=event_id, body=event).execute()
+            return f"✅ 已更新：{updated.get('summary')}（ID: {event_id}）"
+        except Exception as e:
+            return f"更新失敗：{e}"
+
+    def delete_event(self, event_id: str) -> str:
+        service = self._get_service()
+        if not service:
+            return "⚠️ Google Calendar 未連接"
+        try:
+            service.events().delete(calendarId='primary', eventId=event_id).execute()
+            return f"✅ 已刪除事件（ID: {event_id}）"
+        except Exception as e:
+            return f"刪除失敗：{e}"
