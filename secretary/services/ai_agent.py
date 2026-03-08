@@ -143,6 +143,33 @@ TOOLS = [types.Tool(function_declarations=[
         )
     ),
     types.FunctionDeclaration(
+        name="update_event",
+        description="修改 Google Calendar 中已有的事件（需提供 event_id，可從 get_schedule 結果取得）",
+        parameters=types.Schema(
+            type=types.Type.OBJECT,
+            properties={
+                "event_id": types.Schema(type=types.Type.STRING, description="事件 ID"),
+                "title": types.Schema(type=types.Type.STRING, description="新標題（可選）"),
+                "date": types.Schema(type=types.Type.STRING, description="新日期 YYYY-MM-DD（可選）"),
+                "time": types.Schema(type=types.Type.STRING, description="新時間 HH:MM（可選）"),
+                "duration_minutes": types.Schema(type=types.Type.INTEGER, description="新持續時間（分鐘，可選）"),
+                "description": types.Schema(type=types.Type.STRING, description="新備註（可選）"),
+            },
+            required=["event_id"]
+        )
+    ),
+    types.FunctionDeclaration(
+        name="delete_event",
+        description="刪除 Google Calendar 中的事件（需提供 event_id，可從 get_schedule 結果取得）",
+        parameters=types.Schema(
+            type=types.Type.OBJECT,
+            properties={
+                "event_id": types.Schema(type=types.Type.STRING, description="事件 ID"),
+            },
+            required=["event_id"]
+        )
+    ),
+    types.FunctionDeclaration(
         name="get_my_settings",
         description="查看用戶自己的設定，包括顯示名稱和 Google Calendar 連接狀態",
         parameters=types.Schema(
@@ -207,6 +234,19 @@ class SecretaryAgent:
 
             elif name == "complete_task":
                 return _get_task_store(chat_id).complete(args["task_id"])
+
+            elif name == "update_event":
+                return _get_calendar(chat_id).update_event(
+                    event_id=args["event_id"],
+                    title=args.get("title"),
+                    date=args.get("date"),
+                    time=args.get("time"),
+                    duration_minutes=args.get("duration_minutes"),
+                    description=args.get("description"),
+                )
+
+            elif name == "delete_event":
+                return _get_calendar(chat_id).delete_event(args["event_id"])
 
             elif name == "check_team_status":
                 import asyncio
