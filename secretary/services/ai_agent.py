@@ -1,7 +1,8 @@
+import base64
+import json
 import logging
 from datetime import datetime, timezone, timedelta
-from google import genai
-from google.genai import types
+from openai import OpenAI
 
 import config
 import services.member_settings as ms
@@ -66,189 +67,218 @@ eToro 持倉管理規則（重要）：
 
 重要：只有僱主本人才能使用你的功能。"""
 
-TOOLS = [types.Tool(function_declarations=[
-    types.FunctionDeclaration(
-        name="get_schedule",
-        description="查詢指定日期的行程/日曆事件",
-        parameters=types.Schema(
-            type=types.Type.OBJECT,
-            properties={
-                "date": types.Schema(type=types.Type.STRING,
-                                     description="日期，格式 YYYY-MM-DD，不填則查今天")
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_schedule",
+            "description": "查詢指定日期的行程/日曆事件",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "date": {"type": "string", "description": "日期，格式 YYYY-MM-DD，不填則查今天"}
+                }
             }
-        )
-    ),
-    types.FunctionDeclaration(
-        name="add_event",
-        description="新增日曆事件到 Google Calendar",
-        parameters=types.Schema(
-            type=types.Type.OBJECT,
-            properties={
-                "title": types.Schema(type=types.Type.STRING, description="事件標題"),
-                "date": types.Schema(type=types.Type.STRING, description="日期 YYYY-MM-DD"),
-                "time": types.Schema(type=types.Type.STRING, description="時間 HH:MM（24小時制）"),
-                "duration_minutes": types.Schema(type=types.Type.INTEGER,
-                                                 description="持續時間（分鐘），默認60"),
-                "description": types.Schema(type=types.Type.STRING, description="備註說明（可選）"),
-            },
-            required=["title", "date", "time"]
-        )
-    ),
-    types.FunctionDeclaration(
-        name="add_task",
-        description="新增待辦任務",
-        parameters=types.Schema(
-            type=types.Type.OBJECT,
-            properties={
-                "title": types.Schema(type=types.Type.STRING, description="任務標題"),
-                "due_date": types.Schema(type=types.Type.STRING,
-                                         description="截止日期 YYYY-MM-DD（可選）"),
-            },
-            required=["title"]
-        )
-    ),
-    types.FunctionDeclaration(
-        name="list_tasks",
-        description="列出待辦任務清單",
-        parameters=types.Schema(
-            type=types.Type.OBJECT,
-            properties={
-                "show_completed": types.Schema(type=types.Type.BOOLEAN,
-                                               description="是否顯示已完成的任務，默認False")
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_event",
+            "description": "新增日曆事件到 Google Calendar",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "description": "事件標題"},
+                    "date": {"type": "string", "description": "日期 YYYY-MM-DD"},
+                    "time": {"type": "string", "description": "時間 HH:MM（24小時制）"},
+                    "duration_minutes": {"type": "integer", "description": "持續時間（分鐘），默認60"},
+                    "description": {"type": "string", "description": "備註說明（可選）"},
+                },
+                "required": ["title", "date", "time"]
             }
-        )
-    ),
-    types.FunctionDeclaration(
-        name="complete_task",
-        description="將任務標記為已完成。task_id 可以是任務 UUID（前8碼即可）或任務標題關鍵字",
-        parameters=types.Schema(
-            type=types.Type.OBJECT,
-            properties={
-                "task_id": types.Schema(type=types.Type.STRING, description="任務ID（UUID前8碼）或任務標題關鍵字")
-            },
-            required=["task_id"]
-        )
-    ),
-    types.FunctionDeclaration(
-        name="check_team_status",
-        description="查詢團隊狀態，包括 CFO（Whale Radar）的 GitHub Actions 運行狀況和最新警報",
-        parameters=types.Schema(
-            type=types.Type.OBJECT,
-            properties={}
-        )
-    ),
-    types.FunctionDeclaration(
-        name="get_latest_alerts",
-        description="從資料庫取得 Whale Radar 最新發出的警報記錄",
-        parameters=types.Schema(
-            type=types.Type.OBJECT,
-            properties={
-                "limit": types.Schema(type=types.Type.INTEGER, description="筆數，默認5")
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_task",
+            "description": "新增待辦任務",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "description": "任務標題"},
+                    "due_date": {"type": "string", "description": "截止日期 YYYY-MM-DD（可選）"},
+                },
+                "required": ["title"]
             }
-        )
-    ),
-    types.FunctionDeclaration(
-        name="get_current_datetime",
-        description="取得現在的日期和時間（HKT）",
-        parameters=types.Schema(
-            type=types.Type.OBJECT,
-            properties={}
-        )
-    ),
-    types.FunctionDeclaration(
-        name="update_event",
-        description="修改 Google Calendar 中已有的事件（需提供 event_id，可從 get_schedule 結果取得）",
-        parameters=types.Schema(
-            type=types.Type.OBJECT,
-            properties={
-                "event_id": types.Schema(type=types.Type.STRING, description="事件 ID"),
-                "title": types.Schema(type=types.Type.STRING, description="新標題（可選）"),
-                "date": types.Schema(type=types.Type.STRING, description="新日期 YYYY-MM-DD（可選）"),
-                "time": types.Schema(type=types.Type.STRING, description="新時間 HH:MM（可選）"),
-                "duration_minutes": types.Schema(type=types.Type.INTEGER, description="新持續時間（分鐘，可選）"),
-                "description": types.Schema(type=types.Type.STRING, description="新備註（可選）"),
-            },
-            required=["event_id"]
-        )
-    ),
-    types.FunctionDeclaration(
-        name="delete_event",
-        description="刪除 Google Calendar 中的事件（需提供 event_id，可從 get_schedule 結果取得）",
-        parameters=types.Schema(
-            type=types.Type.OBJECT,
-            properties={
-                "event_id": types.Schema(type=types.Type.STRING, description="事件 ID"),
-            },
-            required=["event_id"]
-        )
-    ),
-    types.FunctionDeclaration(
-        name="get_my_settings",
-        description="查看用戶自己的設定，包括顯示名稱和 Google Calendar 連接狀態",
-        parameters=types.Schema(
-            type=types.Type.OBJECT,
-            properties={}
-        )
-    ),
-    types.FunctionDeclaration(
-        name="set_display_name",
-        description="設定用戶的顯示名稱",
-        parameters=types.Schema(
-            type=types.Type.OBJECT,
-            properties={
-                "name": types.Schema(type=types.Type.STRING, description="要設定的名字")
-            },
-            required=["name"]
-        )
-    ),
-    types.FunctionDeclaration(
-        name="list_portfolio",
-        description="查看目前CFO追蹤的eToro持倉記錄（Supabase fallback）",
-        parameters=types.Schema(type=types.Type.OBJECT, properties={})
-    ),
-    types.FunctionDeclaration(
-        name="upsert_holding",
-        description="新增或更新一檔eToro持倉（用於同步實際倉位給CFO追蹤）",
-        parameters=types.Schema(
-            type=types.Type.OBJECT,
-            properties={
-                "ticker": types.Schema(type=types.Type.STRING, description="股票代碼，例如 PANW"),
-                "shares": types.Schema(type=types.Type.NUMBER, description="持股數量"),
-                "open_price": types.Schema(type=types.Type.NUMBER, description="平均開倉價格"),
-                "open_date": types.Schema(type=types.Type.STRING, description="開倉日期 YYYY-MM-DD（可選）"),
-            },
-            required=["ticker", "shares", "open_price"]
-        )
-    ),
-    types.FunctionDeclaration(
-        name="remove_holding",
-        description="從CFO追蹤記錄中移除一檔已平倉的股票",
-        parameters=types.Schema(
-            type=types.Type.OBJECT,
-            properties={
-                "ticker": types.Schema(type=types.Type.STRING, description="股票代碼，例如 TSLA"),
-            },
-            required=["ticker"]
-        )
-    ),
-])]
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_tasks",
+            "description": "列出待辦任務清單",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "show_completed": {"type": "boolean", "description": "是否顯示已完成的任務，默認False"}
+                }
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "complete_task",
+            "description": "將任務標記為已完成。task_id 可以是任務 UUID（前8碼即可）或任務標題關鍵字",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string", "description": "任務ID（UUID前8碼）或任務標題關鍵字"}
+                },
+                "required": ["task_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "check_team_status",
+            "description": "查詢團隊狀態，包括 CFO（Whale Radar）的 GitHub Actions 運行狀況和最新警報",
+            "parameters": {"type": "object", "properties": {}}
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_latest_alerts",
+            "description": "從資料庫取得 Whale Radar 最新發出的警報記錄",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "limit": {"type": "integer", "description": "筆數，默認5"}
+                }
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_current_datetime",
+            "description": "取得現在的日期和時間（HKT）",
+            "parameters": {"type": "object", "properties": {}}
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_event",
+            "description": "修改 Google Calendar 中已有的事件（需提供 event_id，可從 get_schedule 結果取得）",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "event_id": {"type": "string", "description": "事件 ID"},
+                    "title": {"type": "string", "description": "新標題（可選）"},
+                    "date": {"type": "string", "description": "新日期 YYYY-MM-DD（可選）"},
+                    "time": {"type": "string", "description": "新時間 HH:MM（可選）"},
+                    "duration_minutes": {"type": "integer", "description": "新持續時間（分鐘，可選）"},
+                    "description": {"type": "string", "description": "新備註（可選）"},
+                },
+                "required": ["event_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_event",
+            "description": "刪除 Google Calendar 中的事件（需提供 event_id，可從 get_schedule 結果取得）",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "event_id": {"type": "string", "description": "事件 ID"},
+                },
+                "required": ["event_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_my_settings",
+            "description": "查看用戶自己的設定，包括顯示名稱和 Google Calendar 連接狀態",
+            "parameters": {"type": "object", "properties": {}}
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "set_display_name",
+            "description": "設定用戶的顯示名稱",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "要設定的名字"}
+                },
+                "required": ["name"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_portfolio",
+            "description": "查看目前CFO追蹤的eToro持倉記錄（Supabase fallback）",
+            "parameters": {"type": "object", "properties": {}}
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "upsert_holding",
+            "description": "新增或更新一檔eToro持倉（用於同步實際倉位給CFO追蹤）",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "ticker": {"type": "string", "description": "股票代碼，例如 PANW"},
+                    "shares": {"type": "number", "description": "持股數量"},
+                    "open_price": {"type": "number", "description": "平均開倉價格"},
+                    "open_date": {"type": "string", "description": "開倉日期 YYYY-MM-DD（可選）"},
+                },
+                "required": ["ticker", "shares", "open_price"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "remove_holding",
+            "description": "從CFO追蹤記錄中移除一檔已平倉的股票",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "ticker": {"type": "string", "description": "股票代碼，例如 TSLA"},
+                },
+                "required": ["ticker"]
+            }
+        }
+    },
+]
 
 
 class SecretaryAgent:
     def __init__(self):
-        self.client = genai.Client(api_key=config.GEMINI_API_KEY)
-        self.sessions = {}  # chat_id -> chat session
+        self.client = OpenAI(
+            api_key=config.XAI_API_KEY,
+            base_url="https://api.x.ai/v1",
+        )
+        self.histories = {}  # chat_id -> list of messages
 
-    def _get_session(self, chat_id: int):
-        if chat_id not in self.sessions:
-            self.sessions[chat_id] = self.client.chats.create(
-                model="gemini-3.1-pro-preview",
-                config=types.GenerateContentConfig(
-                    tools=TOOLS,
-                    system_instruction=SYSTEM_PROMPT,
-                )
-            )
-        return self.sessions[chat_id]
+    def _get_history(self, chat_id: int) -> list:
+        if chat_id not in self.histories:
+            self.histories[chat_id] = []
+        return self.histories[chat_id]
 
     def _execute_tool(self, name: str, args: dict, chat_id: int) -> str:
         try:
@@ -330,42 +360,42 @@ class SecretaryAgent:
 
     async def handle_message(self, chat_id: int, user_message: str,
                              image_bytes: bytes | None = None) -> str:
-        session = self._get_session(chat_id)
+        history = self._get_history(chat_id)
 
         if image_bytes:
-            parts = [
-                types.Part(inline_data=types.Blob(mime_type="image/jpeg", data=image_bytes)),
-                types.Part(text=user_message or "請分析這張圖片"),
+            b64 = base64.b64encode(image_bytes).decode()
+            user_content = [
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+                {"type": "text", "text": user_message or "請分析這張圖片"},
             ]
-            response = session.send_message(parts)
         else:
-            response = session.send_message(user_message)
+            user_content = user_message
 
-        # Handle function calling loop (max 5 rounds)
+        history.append({"role": "user", "content": user_content})
+
+        # Function calling loop (max 5 rounds)
         for _ in range(5):
-            fn_calls = [p for p in response.candidates[0].content.parts
-                        if hasattr(p, 'function_call') and p.function_call and p.function_call.name]
-            if not fn_calls:
-                break
+            response = self.client.chat.completions.create(
+                model="grok-3",
+                messages=[{"role": "system", "content": SYSTEM_PROMPT}] + history,
+                tools=TOOLS,
+            )
+            msg = response.choices[0].message
+            history.append(msg)
 
-            results = []
-            for part in fn_calls:
-                fc = part.function_call
-                logger.info(f"Calling tool: {fc.name}({dict(fc.args)})")
-                result = self._execute_tool(fc.name, dict(fc.args), chat_id)
-                results.append(types.Part(
-                    function_response=types.FunctionResponse(
-                        name=fc.name,
-                        response={"result": result}
-                    )
-                ))
+            if not msg.tool_calls:
+                return (msg.content or "✅ 完成。").strip()
 
-            response = session.send_message(results)
-
-        # Extract text response
-        for part in response.candidates[0].content.parts:
-            if hasattr(part, 'text') and part.text:
-                return part.text.strip()
+            for tc in msg.tool_calls:
+                name = tc.function.name
+                args = json.loads(tc.function.arguments)
+                logger.info(f"Calling tool: {name}({args})")
+                result = self._execute_tool(name, args, chat_id)
+                history.append({
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": result,
+                })
 
         return "✅ 完成。"
 
