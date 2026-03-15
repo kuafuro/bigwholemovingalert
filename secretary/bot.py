@@ -7,6 +7,7 @@ from handlers.commands import start_command, help_command, status_command, brief
 from handlers.message import handle_message
 from handlers.setting import setting_command
 from services.briefing import schedule_daily_briefings
+import services.reminder_store as reminder_store
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -32,7 +33,11 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.PHOTO, handle_message))
 
-    app.post_init = schedule_daily_briefings
+    async def post_init(app):
+        reminder_store.set_app(app)
+        await schedule_daily_briefings(app)
+
+    app.post_init = post_init
 
     logger.info("🤖 Secretary Bot starting...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
