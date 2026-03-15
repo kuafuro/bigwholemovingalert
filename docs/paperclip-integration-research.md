@@ -210,6 +210,63 @@ C.C. (CEO Agent)
 
 ---
 
+## 附錄 A：Paperclip 心跳協議（9 步驟）
+
+Agent 在每次心跳中執行以下流程：
+
+1. **身份驗證** — `GET /api/agents/me`
+2. **審批跟進** — 檢查待處理的審批
+3. **取得任務** — 取得任務收件匣
+4. **選擇工作** — 優先 in_progress > todo，跳過 blocked
+5. **原子簽出** — `POST /api/issues/{id}/checkout`（防止重複工作，409 Conflict）
+6. **理解上下文** — 讀取 issue 詳情 + 留言
+7. **執行工作** — agent 特定邏輯（如跑 `whale.py`）
+8. **更新狀態** — `PATCH /api/issues/{id}`
+9. **委派子任務** — 視需要建立 subtask 給下屬 agent
+
+## 附錄 B：Paperclip REST API 重要端點
+
+| 端點 | 用途 |
+|------|------|
+| `GET /api/agents/me` | Agent 身份 |
+| `GET /api/companies/{id}/issues?assigneeAgentId={id}&status=...` | 任務收件匣 |
+| `POST /api/issues/{id}/checkout` | 原子任務簽出 |
+| `PATCH /api/issues/{id}` | 更新任務狀態 |
+| `POST /api/companies/{id}/issues` | 建立子任務 / 委派 |
+| `GET /api/approvals/{id}` | 審批管理 |
+| `GET /api/issues/{id}/comments` | 執行緒式溝通 |
+| `GET /api/skills/index` | 技能注入 |
+| `GET /api/health` | 健康檢查 |
+
+## 附錄 C：支援的 Adapter 列表
+
+| Adapter | LLM 供應商 | 備註 |
+|---------|-----------|------|
+| Claude Code | Anthropic | 內建 |
+| Codex | OpenAI | 內建 |
+| **Gemini CLI** | **Google Gemini** | v0.3.1 新增，支援 API key 偵測 |
+| Cursor | 多種 | v0.3.0 新增 |
+| OpenCode | 多種 | v0.3.0 新增 |
+| Pi | 本地 RPC | v0.3.0 新增 |
+| OpenClaw | 多種 | SSE 串流 |
+| Hermes (第三方) | Anthropic/OpenAI/Google | NousResearch 維護 |
+| **Shell / HTTP** | **任意** | **whale-rader 可用此方式整合** |
+
+## 附錄 D：快速啟動指令
+
+```bash
+# 安裝 Paperclip（自動建立 PostgreSQL）
+npx paperclipai onboard --yes
+
+# 或手動安裝
+git clone https://github.com/paperclipai/paperclip.git
+cd paperclip
+pnpm install && pnpm dev
+# API 啟動於 http://localhost:3100
+```
+
+---
+
 ## 參考來源
 
 - [paperclipai/paperclip - GitHub](https://github.com/paperclipai/paperclip)
@@ -217,5 +274,8 @@ C.C. (CEO Agent)
 - [Paperclip 產品文件](https://github.com/paperclipai/paperclip/blob/master/doc/PRODUCT.md)
 - [Paperclip AGENTS.md](https://github.com/paperclipai/paperclip/blob/master/AGENTS.md)
 - [Paperclip Core Concepts](https://github.com/paperclipai/paperclip/blob/master/docs/start/core-concepts.md)
+- [Heartbeat Protocol Guide](https://github.com/paperclipai/paperclip/blob/master/docs/guides/agent-developer/heartbeat-protocol.md)
+- [Developer Documentation](https://github.com/paperclipai/paperclip/blob/master/doc/DEVELOPING.md)
 - [eWeek: Meet Paperclip](https://www.eweek.com/news/meet-paperclip-openclaw-ai-company-tool/)
 - [Flowtivity: Zero-Human Companies](https://flowtivity.ai/blog/zero-human-company-paperclip-ai-agent-orchestration/)
+- [Paperclip Releases](https://github.com/paperclipai/paperclip/releases)
