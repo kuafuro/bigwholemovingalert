@@ -61,6 +61,13 @@ Paperclip 透過 **Adapter** 連接 agent，支援兩種模式：
 
 ### 3.2 整合架構設想
 
+> **Update (2026-03-15)**: 此扁平架構已被階層式 C-suite 模型取代。
+> 新架構定義了 Secretary (C.C.)、CFO (Hayek)、CIO、CHO 四個核心角色。
+> 詳見 [組織架構文件](paperclip-org-architecture.md)。
+
+<details>
+<summary>初始概念（已取代）</summary>
+
 ```
 ┌─────────────────────────────────────────────┐
 │              Paperclip 控制面板               │
@@ -84,6 +91,8 @@ Paperclip 透過 **Adapter** 連接 agent，支援兩種模式：
   │          Supabase + Telegram       │
   └────────────────────────────────────┘
 ```
+
+</details>
 
 ### 3.3 具體整合方式
 
