@@ -3,6 +3,7 @@ import os
 BOT_TOKEN = os.environ.get('SECRETARY_BOT_TOKEN')
 CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
+XAI_API_KEY = os.environ.get('XAI_API_KEY')
 SUPABASE_URL = os.environ.get('SUPABASE_URL')
 SUPABASE_KEY = os.environ.get('SUPABASE_KEY')
 GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN')
